@@ -1,0 +1,85 @@
+
+name: PHP to JSON Playlist
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Download M3U
+        run: |
+          curl -fLsS \
+            "https://premiumplugx.com/VIP/pluglist.php" \
+            -o source.m3u
+
+      - name: Convert M3U to JSON
+        run: |
+          python3 - <<'PY'
+          import json, re
+
+          channels = []
+          name = category = logo = tvg_id = ""
+          url = ""
+
+          def save():
+              if url and name:
+                  channels.append({
+                      "name": name,
+                      "category": category,
+                      "logo": logo,
+                      "tvg_id": tvg_id,
+                      "url": url
+                  })
+
+          with open("source.m3u", encoding="utf-8-sig") as f:
+              for line in f:
+                  line = line.strip()
+                  if line.startswith("#EXTINF"):
+                      save()
+                      name = line.split(",", 1)[-1].strip()
+                      category = re.search(r'group-title="([^"]*)"', line)
+                      logo = re.search(r'tvg-logo="([^"]*)"', line)
+                      tvg_id = re.search(r'tvg-id="([^"]*)"', line)
+
+                      category = category.group(1) if category else ""
+                      logo = logo.group(1) if logo else ""
+                      tvg_id = tvg_id.group(1) if tvg_id else ""
+
+                  elif line and not line.startswith("#"):
+                      url = line
+
+          save()
+
+          if not channels:
+              raise SystemExit("No valid channels found")
+
+          with open("playlist.json", "w", encoding="utf-8") as f:
+              json.dump({
+                  "name": "SDTV LIVE",
+                  "total": len(channels),
+                  "channels": channels
+              }, f, ensure_ascii=False, indent=2)
+          PY
+
+      - name: Save JSON to GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add playlist.json
+          git diff --cached --quiet || git commit -m "Update JSON playlist"
+          git push
+          
